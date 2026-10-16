@@ -16,7 +16,7 @@
    <label for="lu">Username</label><input id="lu" autocomplete="username">
    <label for="lp">Password</label><input id="lp" type="password" autocomplete="current-password">
    <button class="pri" id="doLogin" style="width:100%;margin-top:1rem">Log in</button>
-   <p style="color:var(--mut);font-size:.85rem">First time here? Manager account: <b>admin</b> / <b>admin123</b>. Change it under Staff.</p>
+   <p style="color:var(--mut);font-size:.85rem">First time here? Manager account: <b>Jade</b> / <b>Ayop123</b>. Change it under Staff.</p>
   </div>
   <div id="faceBox" class="hide">
    <video id="lv" muted playsinline></video>
@@ -52,7 +52,7 @@ let db,me=null,cart=[],stream=null,editId=null,faceTarget=null,pendingFace=null,
 async function init(){
  try{db=JSON.parse(store.get(K))}catch(e){}
  if(!db||!db.users){
-  db={users:[{id:'u1',name:'Shop Manager',username:'admin',pass:await hash('admin123'),role:'Manager',face:null}],att:[],sales:[],
+  db={users:[{id:'u1',name:'Shop Manager',username:'Jade',pass:await hash('Ayop123'),role:'Manager',face:null}],att:[],sales:[],
   products:[['Baby Onesie Set (4pc)','Bodysuits',349,25,'👕','#dbe7f3'],['Infant Mittens & Booties','Accessories',159,40,'🧦','#e8e4f0'],['Cotton Pajamas','Sleepwear',289,18,'🌙','#dfe9e3'],
   ['Newborn Swaddle Blanket','Blankets',249,15,'🍼','#f1e8dc'],['Knitted Baby Beanie','Accessories',129,30,'🧢','#e9edf2'],['Baby Romper','Rompers',319,20,'👶','#f0e2e2'],
   ['Baby Bibs (5pc)','Accessories',199,35,'🎀','#e3ecef'],['Toddler Shorts','Bottoms',179,22,'🩳','#e6e9dc']].map((p,i)=>({id:'p'+i,name:p[0],cat:p[1],price:p[2],stock:p[3],img:ph(p[4],p[5])}))};
