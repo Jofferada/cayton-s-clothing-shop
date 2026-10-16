@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="mamamo.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cayton's Baby Clothing Shop - POS</title>
+</head>
+<body>
+<section id="login">
+ <div class="card">
+  <h1>Cayton's Baby Clothing Shop</h1>
+  <p style="color:var(--mut);margin-top:0">Baclaran · Staff sign in</p>
+  <div class="tabs"><button id="tPw" class="on">Username &amp; password</button><button id="tFace">Face recognition</button></div>
+  <div id="pwBox">
+   <label for="lu">Username</label><input id="lu" autocomplete="username">
+   <label for="lp">Password</label><input id="lp" type="password" autocomplete="current-password">
+   <button class="pri" id="doLogin" style="width:100%;margin-top:1rem">Log in</button>
+   <p style="color:var(--mut);font-size:.85rem">First time here? Manager account: <b>admin</b> / <b>admin123</b>. Change it under Staff.</p>
+  </div>
+  <div id="faceBox" class="hide">
+   <video id="lv" muted playsinline></video>
+   <div class="row" style="margin-top:.7rem"><button class="pri" id="faceLogin">Scan &amp; log in</button><button id="faceClock">Clock in / out only</button></div>
+  </div>
+  <div id="lmsg"></div>
+ </div>
+</section>
+
+<div id="app" class="hide">
+ <header><h1>Cayton's Baby Clothing Shop </h1>
+  <div class="who"><span id="uname"></span><span class="role" id="urole"></span><button id="logout">Log out</button></div></header>
+ <nav id="nav"></nav>
+ <main id="view"></main>
+</div>
+<div id="toast" class="hide"></div>
+
+<script>
+'use strict';
+const K='cayton_pos_v1',SK='cayton_session';
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const peso=n=>'₱'+Number(n).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}}};
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+const tm=t=>t?new Date(t).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit'}):'—';
+const dt=t=>new Date(t).toLocaleString('en-PH',{dateStyle:'medium',timeStyle:'short'});
+const ph=(e,c)=>'data:image/svg+xml;utf8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="${c}"/><text x="100" y="125" font-size="90" text-anchor="middle">${e}</text></svg>`);
+async function hash(s){try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return'p:'+btoa(unescape(encodeURIComponent(s)))}}
+let db,me=null,cart=[],stream=null,editId=null,faceTarget=null,pendingFace=null,tab='sales',q='';
+
+async function init(){
+ try{db=JSON.parse(store.get(K))}catch(e){}
+ if(!db||!db.users){
+  db={users:[{id:'u1',name:'Shop Manager',username:'admin',pass:await hash('admin123'),role:'Manager',face:null}],att:[],sales:[],
+  products:[['Baby Onesie Set (4pc)','Bodysuits',349,25,'👕','#dbe7f3'],['Infant Mittens & Booties','Accessories',159,40,'🧦','#e8e4f0'],['Cotton Pajamas','Sleepwear',289,18,'🌙','#dfe9e3'],
+  ['Newborn Swaddle Blanket','Blankets',249,15,'🍼','#f1e8dc'],['Knitted Baby Beanie','Accessories',129,30,'🧢','#e9edf2'],['Baby Romper','Rompers',319,20,'👶','#f0e2e2'],
+  ['Baby Bibs (5pc)','Accessories',199,35,'🎀','#e3ecef'],['Toddler Shorts','Bottoms',179,22,'🩳','#e6e9dc']].map((p,i)=>({id:'p'+i,name:p[0],cat:p[1],price:p[2],stock:p[3],img:ph(p[4],p[5])}))};
+  save();
+ }
+ try{const s=JSON.parse(store.get(SK)||'null');if(s)me=db.users.find(u=>u.id===s)||null}catch(e){}
+ me?enter():showLogin();
+}
+function save(){if(!store.set(K,JSON.stringify(db)))toast('Could not save — browser storage is full or blocked.','err')}
+let tt;function toast(m,k){const t=$('#toast');t.textContent=m;t.className=k||'';clearTimeout(tt);tt=setTimeout(()=>t.className='hide',3500)}
+const msg=(el,m,k)=>el.innerHTML=m?`<div class="msg ${k||''}">${esc(m)}</div>`:'';
+
+/* ---------- Camera + face matching (grayscale pixel-pattern comparison) ---------- */
+async function cam(v){
+ try{stopCam();stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}});v.srcObject=stream;await v.play();return true}catch(e){return false}
+}
+function stopCam(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null}
+function snap(v){const c=document.createElement('canvas');c.width=320;c.height=Math.round(320*(v.videoHeight||240)/(v.videoWidth||320));c.getContext('2d').drawImage(v,0,0,c.width,c.height);return c.toDataURL('image/jpeg',.8)}
+function descOf(el){
+ const w=el.videoWidth||el.width,h=el.videoHeight||el.height,s=Math.min(w,h)*.7,c=document.createElement('canvas');c.width=c.height=24;
+ const x=c.getContext('2d');x.drawImage(el,(w-s)/2,(h-s)/2,s,s,0,0,24,24);
+ const d=x.getImageData(0,0,24,24).data,a=[];for(let i=0;i<d.length;i+=4)a.push(.3*d[i]+.59*d[i+1]+.11*d[i+2]);
+ const m=a.reduce((p,n)=>p+n,0)/a.length,sd=Math.sqrt(a.reduce((p,n)=>p+(n-m)**2,0)/a.length)||1;return a.map(n=>(n-m)/sd);
+}
+const loadImg=src=>new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.src=src});
+const corr=(a,b)=>a.reduce((p,n,i)=>p+n*b[i],0)/a.length;
+async function scan(v){
+ const frames=[];for(let i=0;i<4;i++){frames.push(descOf(v));await new Promise(r=>setTimeout(r,250))}
+ const res=[];for(const u of db.users.filter(u=>u.face)){const ref=descOf(await loadImg(u.face));res.push({u,s:Math.max(...frames.map(f=>corr(f,ref)))})}
+ res.sort((a,b)=>b.s-a.s);return res;
+}
+async function faceMatch(v,out){
+ if(!stream){msg(out,'Camera is not on. Allow camera access and try again.','err');return null}
+ if(!db.users.some(u=>u.face)){msg(out,'No faces are enrolled yet. Log in with a password and enroll under Staff.','err');return null}
+ msg(out,'Scanning… hold still and look at the camera.');
+ const r=await scan(v),best=r[0];
+ if(!best||best.s<.72||(r[1]&&best.s-r[1].s<.04)){msg(out,'Face not recognized. Face the camera in good light, or use your password.','err');return null}
+ return best.u;
+}
+
+/* ---------- Login ---------- */
+function showLogin(){$('#app').classList.add('hide');$('#login').classList.remove('hide');setLoginTab('pw')}
+async function setLoginTab(t){
+ $('#tPw').classList.toggle('on',t==='pw');$('#tFace').classList.toggle('on',t==='face');
+ $('#pwBox').classList.toggle('hide',t!=='pw');$('#faceBox').classList.toggle('hide',t!=='face');msg($('#lmsg'),'');
+ if(t==='face'){if(!await cam($('#lv')))msg($('#lmsg'),'Camera unavailable. Allow camera access in your browser, or use username & password.','err')}else stopCam();
+}
+$('#tPw').onclick=()=>setLoginTab('pw');$('#tFace').onclick=()=>setLoginTab('face');
+$('#doLogin').onclick=async()=>{
+ const n=$('#lu').value.trim().toLowerCase(),p=$('#lp').value,u=db.users.find(x=>x.username.toLowerCase()===n);
+ if(!n||!p)return msg($('#lmsg'),'Enter your username and password.','err');
+ if(!u||u.pass!==await hash(p))return msg($('#lmsg'),'Incorrect username or password.','err');
+ $('#lp').value='';login(u,'Password');
+};
+$('#lp').onkeydown=e=>{if(e.key==='Enter')$('#doLogin').click()};
+$('#faceLogin').onclick=async()=>{const u=await faceMatch($('#lv'),$('#lmsg'));if(u)login(u,'Face')};
+$('#faceClock').onclick=async()=>{
+ const u=await faceMatch($('#lv'),$('#lmsg'));if(!u)return;
+ const open=db.att.find(a=>a.uid===u.id&&!a.out);
+ if(open){open.out=Date.now();msg($('#lmsg'),`${u.name}: time out recorded at ${tm(open.out)}.`,'ok')}
+ else{clockIn(u,'Face');msg($('#lmsg'),`${u.name}: time in recorded at ${tm(Date.now())}.`,'ok')}
+ save();
+};
+function clockIn(u,method){
+ if(db.att.some(a=>a.uid===u.id&&!a.out))return;
+ const n=new Date();db.att.push({id:uid(),uid:u.id,name:u.name,role:u.role,date:today(),in:n.getTime(),out:null,method,late:n.getHours()>=10&&n.getMinutes()>=0&&(n.getHours()>10||n.getMinutes()>0)});
+}
+function login(u,method){stopCam();me=u;clockIn(u,method);save();store.set(SK,JSON.stringify(u.id));enter()}
+$('#logout').onclick=()=>{
+ const open=db.att.find(a=>a.uid===me.id&&!a.out);if(open)open.out=Date.now();
+ save();store.set(SK,'null');me=null;cart=[];stopCam();showLogin();
+};
+
+/* ---------- Shell ---------- */
+const TABS=[['sales','Sales / Cashier'],['inv','Inventory Management','M'],['att','Attendance Tracking'],['hist','Transaction History'],['staff','Staff / Face Enrollment','M']];
+function enter(){
+ $('#login').classList.add('hide');$('#app').classList.remove('hide');
+ $('#uname').textContent=me.name;$('#urole').textContent=me.role;
+ tab='sales';render();
+}
+function render(){
+ stopCamIfLeaving();
+ $('#nav').innerHTML=TABS.filter(t=>!t[2]||me.role==='Manager').map(t=>`<button data-t="${t[0]}" class="${t[0]===tab?'on':''}">${t[1]}</button>`).join('');
+ ({sales:vSales,inv:vInv,att:vAtt,hist:vHist,staff:vStaff})[tab]();
+}
+function stopCamIfLeaving(){if(tab!=='staff')stopCam()}
+$('#nav').onclick=e=>{const b=e.target.closest('button');if(b){tab=b.dataset.t;render()}};
+
+/* ---------- Sales ---------- */
+const total=()=>cart.reduce((s,c)=>{const p=db.products.find(x=>x.id===c.id);return s+(p?p.price*c.q:0)},0);
+function vSales(){
+ $('#view').innerHTML=`<div class="split"><div class="card"><h2>Products</h2><input id="srch" placeholder="Search name or category" value="${esc(q)}"><div class="grid" id="pg"></div></div>
+ <div class="card" style="align-self:start"><h2>Cart</h2><div id="cart"></div></div></div>`;
+ $('#srch').oninput=e=>{q=e.target.value;prods()};prods();drawCart();
+}
+function prods(){
+ const f=db.products.filter(p=>(p.name+p.cat).toLowerCase().includes(q.toLowerCase()));
+ $('#pg').innerHTML=f.map(p=>`<button class="prod ${p.stock<1?'out':''}" data-add="${p.id}"><img src="${p.img}" alt=""><div><b>${esc(p.name)}</b><small>${esc(p.cat)}</small><div class="pr">${peso(p.price)}</div><small>${p.stock<1?'Out of stock':p.stock+' in stock'}</small></div></button>`).join('')||'<p>No products match your search.</p>';
+ $('#pg').onclick=e=>{const b=e.target.closest('[data-add]');if(b)addCart(b.dataset.add)};
+}
+function addCart(id){
+ const p=db.products.find(x=>x.id===id),c=cart.find(x=>x.id===id);
+ if(p.stock<1)return toast(`${p.name} is out of stock.`,'err');
+ if(c){if(c.q>=p.stock)return toast(`Only ${p.stock} of ${p.name} in stock.`,'err');c.q++}else cart.push({id,q:1});
+ drawCart();
+}
+function drawCart(){
+ const t=total();
+ $('#cart').innerHTML=(cart.length?cart.map(c=>{const p=db.products.find(x=>x.id===c.id);return`<div class="cartrow"><b>${esc(p.name)}</b><span>${peso(p.price*c.q)}</span>
+ <div class="qty"><button data-d="${c.id}" aria-label="Less">−</button><span>${c.q}</span><button data-i="${c.id}" aria-label="More">+</button></div><button class="sm dng" data-r="${c.id}">Remove</button></div>`}).join(''):'<p style="color:var(--mut)">Cart is empty. Tap a product to add it.</p>')+
+ `<div class="line"><span>Subtotal</span><span>${peso(t)}</span></div><div class="line tot"><span>Total</span><span>${peso(t)}</span></div>
+ <label for="cash">Cash received (₱)</label><input id="cash" type="number" min="0" step="0.01" inputmode="decimal">
+ <div class="line"><span>Change</span><b id="chg">${peso(0)}</b></div><div id="smsg"></div>
+ <button class="pri" id="done" style="width:100%;margin-top:.5rem">Complete Sale</button>`;
+ $('#cash').oninput=()=>{const c=parseFloat($('#cash').value)||0;$('#chg').textContent=peso(Math.max(0,c-total()))};
+ $('#done').onclick=complete;
+}
+$('#view').addEventListener('click',e=>{
+ const b=e.target.closest('[data-i],[data-d],[data-r]');if(!b||tab!=='sales')return;
+ const id=b.dataset.i||b.dataset.d||b.dataset.r,c=cart.find(x=>x.id===id),p=db.products.find(x=>x.id===id);
+ if(b.dataset.i){if(c.q>=p.stock)return toast(`Only ${p.stock} of ${p.name} in stock.`,'err');c.q++}
+ else if(b.dataset.d){c.q--;if(c.q<1)cart=cart.filter(x=>x!==c)}else cart=cart.filter(x=>x!==c);
+ drawCart();
+});
+function complete(){
+ const out=$('#smsg'),t=total(),cash=parseFloat($('#cash').value);
+ if(!cart.length)return msg(out,'Add at least one item to the cart.','err');
+ for(const c of cart){const p=db.products.find(x=>x.id===c.id);if(c.q>p.stock)return msg(out,`Out of stock: only ${p.stock} of ${p.name} left.`,'err')}
+ if(isNaN(cash)||cash<t)return msg(out,`Cash received must be at least ${peso(t)}.`,'err');
+ const items=cart.map(c=>{const p=db.products.find(x=>x.id===c.id);p.stock-=c.q;return{name:p.name,price:p.price,q:c.q}});
+ const s={id:uid(),no:'S'+String(db.sales.length+1).padStart(5,'0'),ts:Date.now(),by:me.name,items,total:t,cash,change:cash-t};
+ db.sales.push(s);save();cart=[];toast(`Sale ${s.no} complete. Change: ${peso(s.change)}`);vSales();
+}
+
+/* ---------- Inventory ---------- */
+function vInv(){
+ const p=editId&&db.products.find(x=>x.id===editId);
+ $('#view').innerHTML=`<div class="card" style="margin-bottom:1rem"><h2>${p?'Edit product':'Add product'}</h2>
+ <div class="row" style="align-items:end"><div><label>Item name</label><input id="pn" value="${p?esc(p.name):''}"></div><div><label>Category</label><input id="pc" value="${p?esc(p.cat):''}"></div>
+ <div><label>Price (₱)</label><input id="pp" type="number" min="0" step="0.01" value="${p?p.price:''}"></div><div><label>Stock</label><input id="ps" type="number" min="0" step="1" value="${p?p.stock:''}"></div></div>
+ <label>Image (optional)</label><input id="pi" type="file" accept="image/*"><div id="imsg"></div>
+ <div class="row" style="margin-top:.8rem;justify-content:flex-start"><button class="pri" id="psave">${p?'Save changes':'Add product'}</button>${p?'<button id="pcancel">Cancel</button>':''}</div></div>
+ <div class="card tw"><h2>Inventory</h2><table><thead><tr><th>Image</th><th>Item name</th><th>Category</th><th>Price (₱)</th><th>Stock</th><th>Actions</th></tr></thead><tbody>
+ ${db.products.map(x=>`<tr><td><img src="${x.img}" alt=""></td><td>${esc(x.name)}</td><td>${esc(x.cat)}</td><td>${peso(x.price)}</td><td>${x.stock<1?'<span style="color:var(--err)">Out of stock</span>':x.stock}</td>
+ <td><button class="sm" data-e="${x.id}">Edit</button> <button class="sm dng" data-x="${x.id}">Delete</button></td></tr>`).join('')||'<tr><td colspan="6">No products yet. Add your first item above.</td></tr>'}</tbody></table></div>`;
+ $('#psave').onclick=saveProd;if(p)$('#pcancel').onclick=()=>{editId=null;vInv()};
+ document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>{editId=b.dataset.e;vInv();scrollTo(0,0)});
+ document.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{const x=db.products.find(y=>y.id===b.dataset.x);if(confirm(`Delete "${x.name}"?`)){db.products=db.products.filter(y=>y!==x);cart=cart.filter(c=>c.id!==x.id);save();vInv()}});
+}
+function resize(file,max){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>{const i=new Image();i.onload=()=>{const k=Math.min(1,max/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*k;c.height=i.height*k;c.getContext('2d').drawImage(i,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',.8))};i.onerror=rej;i.src=r.result};r.onerror=rej;r.readAsDataURL(file)})}
+async function saveProd(){
+ const n=$('#pn').value.trim(),c=$('#pc').value.trim()||'General',pr=parseFloat($('#pp').value),st=parseInt($('#ps').value,10),f=$('#pi').files[0];
+ if(!n)return msg($('#imsg'),'Enter an item name.','err');
+ if(isNaN(pr)||pr<0)return msg($('#imsg'),'Enter a valid price in ₱.','err');
+ if(isNaN(st)||st<0)return msg($('#imsg'),'Enter a valid stock quantity.','err');
+ let img;if(f){try{img=await resize(f,300)}catch(e){return msg($('#imsg'),'That image could not be read. Try a JPG or PNG.','err')}}
+ const p=editId&&db.products.find(x=>x.id===editId);
+ if(p){Object.assign(p,{name:n,cat:c,price:pr,stock:st});if(img)p.img=img}
+ else db.products.push({id:uid(),name:n,cat:c,price:pr,stock:st,img:img||ph('🧸','#e6edf5')});
+ save();editId=null;toast('Product saved.');vInv();
+}
+
+/* ---------- Attendance ---------- */
+function vAtt(){
+ const rows=db.att.filter(a=>me.role==='Manager'||a.uid===me.id).slice().reverse();
+ $('#view').innerHTML=`<div class="card tw"><h2>Attendance Tracking</h2><p style="color:var(--mut);margin-top:0">Time in is logged at every login. Time out is logged at logout. Late means time in after 10:00 AM.</p>
+ <table><thead><tr><th>Staff name</th><th>Role</th><th>Date</th><th>Time in</th><th>Time out</th><th>Method</th><th>Status</th></tr></thead><tbody>
+ ${rows.map(a=>`<tr><td>${esc(a.name)}</td><td>${esc(a.role)}</td><td>${esc(a.date)}</td><td>${tm(a.in)}</td><td>${tm(a.out)}</td><td>${esc(a.method)}</td><td>${a.out?'Completed':'On duty'}${a.late?' · Late':''}</td></tr>`).join('')||'<tr><td colspan="7">No attendance records yet.</td></tr>'}</tbody></table></div>`;
+}
+
+/* ---------- History ---------- */
+function vHist(){
+ const rev=db.sales.reduce((s,x)=>s+x.total,0),n=db.sales.reduce((s,x)=>s+x.items.reduce((a,i)=>a+i.q,0),0);
+ $('#view').innerHTML=`<div class="stats"><div class="card"><span>Total sales revenue</span><b>${peso(rev)}</b></div><div class="card"><span>Transactions</span><b>${db.sales.length}</b></div><div class="card"><span>Items sold</span><b>${n}</b></div></div>
+ <div class="card tw"><h2>Transaction History</h2><table><thead><tr><th>No.</th><th>Date</th><th>Cashier</th><th>Items bought</th><th>Total paid</th><th>Cash</th><th>Change</th></tr></thead><tbody>
+ ${db.sales.slice().reverse().map(s=>`<tr><td>${s.no}</td><td>${dt(s.ts)}</td><td>${esc(s.by)}</td><td>${s.items.map(i=>`${esc(i.name)} × ${i.q}`).join('<br>')}</td><td><b>${peso(s.total)}</b></td><td>${peso(s.cash)}</td><td>${peso(s.change)}</td></tr>`).join('')||'<tr><td colspan="7">No sales yet. Completed sales appear here.</td></tr>'}</tbody></table></div>`;
+}
+
+/* ---------- Staff & face enrollment ---------- */
+async function vStaff(){
+ faceTarget=null;pendingFace=null;
+ $('#view').innerHTML=`<div class="split"><div class="card"><h2>Add staff</h2>
+ <label>Full name</label><input id="sn"><label>Username</label><input id="su" autocomplete="off"><label>Password</label><input id="sp" type="password" autocomplete="new-password">
+ <label>Role</label><select id="sr"><option>Crew</option><option>Manager</option></select><div id="smsg"></div>
+ <button class="pri" id="sadd" style="margin-top:.8rem">Add staff</button></div>
+ <div class="card"><h2>Face enrollment</h2><p id="ft" style="color:var(--mut);margin-top:0">Capturing for: the new staff in the form.</p>
+ <video id="sv" muted playsinline></video><div id="cmsg"></div>
+ <div class="row" style="margin-top:.6rem;justify-content:flex-start"><button class="pri" id="cap">Capture face</button></div>
+ <img id="prev" class="snap hide" alt="Captured face" style="margin-top:.6rem"></div></div>
+ <div class="card tw" style="margin-top:1rem"><h2>Staff</h2><table><thead><tr><th>Photo</th><th>Name</th><th>Username</th><th>Role</th><th>Face</th><th>Actions</th></tr></thead><tbody>
+ ${db.users.map(u=>`<tr><td>${u.face?`<img src="${u.face}" alt="">`:'—'}</td><td>${esc(u.name)}</td><td>${esc(u.username)}</td><td>${esc(u.role)}</td><td>${u.face?'Enrolled':'Not enrolled'}</td>
+ <td><button class="sm" data-f="${u.id}">${u.face?'Re-capture face':'Enroll face'}</button> <button class="sm" data-p="${u.id}">New password</button> ${u.id!==me.id?`<button class="sm dng" data-x="${u.id}">Remove</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;
+ if(!await cam($('#sv')))msg($('#cmsg'),'Camera unavailable. Allow camera access in your browser to capture faces.','err');
+ $('#cap').onclick=capture;$('#sadd').onclick=addStaff;
+ document.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{faceTarget=b.dataset.f;$('#ft').textContent='Capturing for: '+db.users.find(u=>u.id===faceTarget).name;scrollTo(0,0)});
+ document.querySelectorAll('[data-p]').forEach(b=>b.onclick=async()=>{const u=db.users.find(x=>x.id===b.dataset.p),p=prompt('New password for '+u.name+' (min 6 characters):');if(p===null)return;if(p.length<6)return toast('Password must be at least 6 characters.','err');u.pass=await hash(p);save();toast('Password updated.')});
+ document.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{const u=db.users.find(x=>x.id===b.dataset.x);if(confirm(`Remove ${u.name}? Their attendance records are kept.`)){db.users=db.users.filter(x=>x!==u);save();vStaff()}});
+}
+function capture(){
+ const v=$('#sv');if(!stream||!v.videoWidth)return msg($('#cmsg'),'Camera is not ready.','err');
+ const img=snap(v);$('#prev').src=img;$('#prev').classList.remove('hide');
+ if(faceTarget){const u=db.users.find(x=>x.id===faceTarget);u.face=img;save();toast(`Face saved for ${u.name}.`);vStaff()}
+ else{pendingFace=img;msg($('#cmsg'),'Face captured. Fill in the form and tap Add staff.','ok')}
+}
+async function addStaff(){
+ const n=$('#sn').value.trim(),u=$('#su').value.trim(),p=$('#sp').value,out=$('#smsg');
+ if(!n||!u)return msg(out,'Enter the full name and a username.','err');
+ if(p.length<6)return msg(out,'Password must be at least 6 characters.','err');
+ if(db.users.some(x=>x.username.toLowerCase()===u.toLowerCase()))return msg(out,'That username is already taken.','err');
+ db.users.push({id:uid(),name:n,username:u,pass:await hash(p),role:$('#sr').value,face:pendingFace});
+ save();toast(pendingFace?`${n} added with face enrolled.`:`${n} added. Capture a face to enable face login.`);vStaff();
+}
+init();
+</script>
+</body>
+</html>
